@@ -12,6 +12,7 @@ import android.os.StatFs;
 
 /** Only public, permission-free Android APIs. No estimates of CPU usage or battery capacity. */
 final class DeviceSnapshot {
+    int thermalStatus = -1;
     int battery = -1, temperature = Integer.MIN_VALUE, voltage = -1;
     int batteryStatus = BatteryManager.BATTERY_STATUS_UNKNOWN;
     int health = BatteryManager.BATTERY_HEALTH_UNKNOWN;
@@ -49,6 +50,7 @@ final class DeviceSnapshot {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 String[] states = {"Normal", "Leve", "Moderado", "Severo", "Crítico", "Emergência", "Desligamento"};
                 int status = power.getCurrentThermalStatus();
+                s.thermalStatus = status;
                 s.thermal = status >= 0 && status < states.length ? states[status] : "Indisponível";
             }
         }

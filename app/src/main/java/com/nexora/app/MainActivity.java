@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.net.Uri;
+import java.lang.ref.WeakReference;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -28,7 +30,7 @@ import java.text.DateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-/** A local device dashboard. System settings always own changes to the device. */
+/** Local readings and explicitly authorized, reversible screen settings. */
 public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(12, 16, 18);
     private static final int CARD = Color.rgb(24, 30, 32);
@@ -37,7 +39,7 @@ public final class MainActivity extends Activity {
     private static final int LIME = Color.rgb(196, 245, 107);
     private static final int BLUE = Color.rgb(139, 198, 255);
     private static final int ORANGE = Color.rgb(255, 193, 133);
-    private static final String[] TABS = {"Visão geral", "Bateria", "Espaço", "Desempenho"};
+    private static final String[] TABS = {"Início", "Bateria", "Espaço", "Sistema", "Cuidar"};
     private final Handler handler = new Handler(Looper.getMainLooper());
     private LinearLayout content, navigation;
     private ScrollView scroll;
@@ -88,6 +90,7 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         refresh(true);
+        if (Maintenance.due(this, System.currentTimeMillis())) runMaintenance();
         handler.postDelayed(refreshTask, 30000);
     }
     @Override protected void onPause() {
@@ -108,6 +111,7 @@ public final class MainActivity extends Activity {
             final int selected = i;
             Button item = button(TABS[i], tab == i, () -> { tab = selected; refresh(false); });
             item.setTextSize(11);
+            item.setPadding(dp(3), dp(8), dp(3), dp(8));
             item.setSelected(tab == i);
             item.setContentDescription(TABS[i] + (tab == i ? ", selecionado" : ""));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(54), 1);
@@ -118,6 +122,7 @@ public final class MainActivity extends Activity {
             case 1: battery(); break;
             case 2: storage(); break;
             case 3: performance(); break;
+            case 4: care(); break;
             default: overview();
         }
         TextView timestamp = label("Atualizado às " + DateFormat.getTimeInstance(DateFormat.SHORT,
@@ -151,6 +156,7 @@ public final class MainActivity extends Activity {
                 Metrics.bytes(snapshot.freeStorage) + " disponíveis", BLUE, () -> { tab = 2; refresh(false); });
         resourceCard("Memória RAM em uso", memoryPercent(),
                 Metrics.bytes(snapshot.freeMemory) + " disponíveis", ORANGE, () -> { tab = 3; refresh(false); });
+        content.addView(button("Diagnosticar e cuidar  →", true, () -> { tab = 4; refresh(false); }));
         section("Pequenas ações, mais controle");
         LinearLayout tip = card();
         tip.addView(label("Um cuidado de cada vez", 18, TEXT, true));
@@ -228,6 +234,95 @@ public final class MainActivity extends Activity {
         section("RAM em uso faz parte");
         paragraph("O Android usa RAM para manter apps prontos e libera recursos quando necessário. Memória ocupada, sozinha, não significa lentidão. O NEXORA não encerra processos nem promete acelerar o aparelho.");
         content.addView(button("Gerenciar aplicativos", true, () -> open(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)));
+    }
+
+    private void care() {
+        eyebrow("CUIDADO DO APARELHO");
+        title("Ações reais.\nVocê no controle.");
+        paragraph("Diagnóstico atualizado e ajustes de consumo. Não há ganho de velocidade ou correção de erros garantidos.");
+        java.util.List<Diagnostics.Finding> findings = Diagnostics.inspect(snapshot);
+        section(findings.isEmpty() ? "Sem alertas nas leituras disponíveis" : findings.size() + " ponto(s) para revisar");
+        if (findings.isEmpty()) paragraph("Nenhum limite monitorado foi atingido agora. Isso não verifica erros internos de apps nem garante ausência de problemas.");
+        for (Diagnostics.Finding finding : findings) {
+            LinearLayout card = card();
+            card.addView(label(finding.title, 18, ORANGE, true));
+            card.addView(body(finding.description));
+            if (finding.action != null) card.addView(button("Abrir configurações", false, () -> open(finding.action)));
+            addCard(card);
+        }
+        ScreenProfile profile = new ScreenProfile(this);
+        LinearLayout economy = card();
+        economy.addView(label("Perfil econômico de tela", 18, LIME, true));
+        economy.addView(body("Aplica brilho manual de até 30% e suspensão de tela em até 30 s. Valores já menores são mantidos. Reduz o potencial consumo da tela; não aumenta CPU ou RAM. Requer autorização para alterar configurações."));
+        economy.addView(body("Os ajustes continuam após fechar ou desinstalar o app. Restaure aqui antes de desinstalar, ou ajuste a tela nas configurações do Android. Mudanças posteriores do usuário são preservadas quando detectáveis."));
+        economy.addView(label(profile.active() ? "Ajustes anteriores salvos para restauração" : "Nenhum perfil aplicado pelo NEXORA", 12, MUTED, false));
+        economy.addView(button(profile.active() ? "Restaurar ajustes anteriores" : "Aplicar perfil econômico", true, this::screenProfile));
+        addCard(economy);
+        LinearLayout cleaning = card();
+        cleaning.addView(label("Manutenção local", 18, TEXT, true));
+        cleaning.addView(body("Remove somente arquivos temporários do cache do NEXORA, fora da tela principal. Não limpa cache de outros apps, fotos, downloads ou dados pessoais. O ganho de espaço pode ser zero e não implica aceleração."));
+        cleaning.addView(button(Maintenance.running() ? "Limpeza em andamento…" : "Limpar cache do NEXORA", false, this::runMaintenance));
+        String lastResult = Maintenance.preferences(this).getString("lastResult", "Nenhuma limpeza concluída ainda.");
+        long completed = Maintenance.preferences(this).getLong("lastCompleted", 0);
+        if (completed > 0) lastResult = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT,
+                Locale.forLanguageTag("pt-BR")).format(new Date(completed)) + "\n" + lastResult;
+        cleaning.addView(body(lastResult));
+        boolean enabled = Maintenance.enabled(this);
+        cleaning.addView(body("Automática: " + (enabled ? "ativada" : "desativada") + ". Quando ativada, limpa o cache local ao abrir o app, no máximo uma vez a cada 6 horas. Não fica rodando em segundo plano e não altera configurações da tela automaticamente."));
+        cleaning.addView(button(enabled ? "Desativar manutenção automática" : "Ativar manutenção automática", false, () -> {
+            if (Maintenance.enabled(this)) {
+                Maintenance.preferences(this).edit().putBoolean("automatic", false).apply();
+                refresh(true);
+            } else {
+                new AlertDialog.Builder(this).setTitle("Ativar manutenção local?")
+                        .setMessage("Ao abrir o NEXORA, ele poderá remover seu próprio cache temporário, no máximo uma vez a cada 6 horas. Não há limpeza de outros aplicativos nem ganho de desempenho garantido.")
+                        .setNegativeButton("Cancelar", null)
+                        .setPositiveButton("Ativar", (dialog, which) -> {
+                            Maintenance.preferences(this).edit().putBoolean("automatic", true).apply();
+                            if (Maintenance.due(this, System.currentTimeMillis())) runMaintenance();
+                            refresh(true);
+                        }).show();
+            }
+        }));
+        addCard(cleaning);
+        section("Um aplicativo está falhando?");
+        paragraph("O NEXORA não pode acessar ou corrigir erros internos de outros apps. Verifique atualizações e reinicie o aparelho. Nas configurações do app com falha, você pode revisar seu cache. Evite apagar dados sem backup; se a falha persistir, contate o desenvolvedor.");
+        content.addView(button("Revisar apps com falhas", false, () -> open(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)));
+        content.addView(button("Verificar atualização do Android", false, () -> open("android.settings.SYSTEM_UPDATE_SETTINGS")));
+    }
+
+    private void screenProfile() {
+        ScreenProfile profile = new ScreenProfile(this);
+        if (!profile.permitted()) {
+            new AlertDialog.Builder(this).setTitle("Autorizar ajustes de tela")
+                    .setMessage("Na próxima tela, permita ao NEXORA alterar configurações do sistema. Ao voltar, toque novamente no botão para aplicar ou restaurar o perfil. A permissão é opcional; monitoramento e limpeza local funcionam sem ela.")
+                    .setNegativeButton("Cancelar", null)
+                    .setPositiveButton("Abrir autorização", (dialog, which) -> openSettingsPermission()).show();
+            return;
+        }
+        boolean restore = profile.active();
+        new AlertDialog.Builder(this).setTitle(restore ? "Restaurar tela?" : "Aplicar perfil econômico?")
+                .setMessage(restore ? "Recupera brilho e tempo de tela anteriores, preservando alterações posteriores quando detectáveis."
+                        : "Muda o brilho para manual de até 30% e a suspensão para até 30 s. Não aumenta brilho ou tempo já menores. Os ajustes permanecem até você restaurar, mesmo ao fechar ou desinstalar o app. Não há ganho de bateria medido.")
+                .setNegativeButton("Cancelar", null)
+                .setPositiveButton(restore ? "Restaurar" : "Aplicar", (dialog, which) -> {
+                    String result = restore ? profile.restore() : profile.apply();
+                    refresh(true);
+                    new AlertDialog.Builder(this).setTitle("Resultado dos ajustes").setMessage(result).setPositiveButton("Entendi", null).show();
+                }).show();
+    }
+    private void openSettingsPermission() {
+        try { startActivity(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + getPackageName()))); }
+        catch (ActivityNotFoundException | SecurityException e) { open(Settings.ACTION_SETTINGS); }
+    }
+    private void runMaintenance() {
+        WeakReference<MainActivity> reference = new WeakReference<>(this);
+        boolean started = Maintenance.run(getApplicationContext(), () -> {
+            MainActivity activity = reference.get();
+            if (activity != null && !activity.isDestroyed() && !activity.isFinishing()) activity.refresh(true);
+        });
+        if (!started) Toast.makeText(this, "Uma limpeza já está em andamento.", Toast.LENGTH_SHORT).show();
+        refresh(true);
     }
 
     private int storagePercent() { return Metrics.percent(used(snapshot.totalStorage, snapshot.freeStorage), snapshot.totalStorage); }
@@ -356,8 +451,8 @@ public final class MainActivity extends Activity {
         }
     }
     private void about() {
-        new AlertDialog.Builder(this).setTitle("NEXORA · 0.1.0")
-                .setMessage("Seu celular no melhor desempenho.\n\nUm painel para entender bateria, armazenamento e memória.\n\nSeus dados ficam no aparelho. Sem anúncios, rastreadores, conta ou conexão com servidores. Nenhuma permissão especial é solicitada.\n\nAs leituras dependem das informações disponibilizadas pelo Android e pelo fabricante.")
+        new AlertDialog.Builder(this).setTitle("NEXORA · 0.2.0")
+                .setMessage("Seu celular no melhor desempenho.\n\nUm painel para entender bateria, armazenamento e memória.\n\nSeus dados ficam no aparelho. Sem anúncios, rastreadores, conta ou conexão com servidores. O perfil de tela pede autorização opcional para alterar configurações do sistema. A limpeza é limitada ao cache do NEXORA.\n\nAs leituras dependem das informações disponibilizadas pelo Android e pelo fabricante.")
                 .setPositiveButton("Entendi", null).show();
     }
 

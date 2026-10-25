@@ -35,10 +35,10 @@ public class MainActivityTest {
             assertNotNull(find(activity.getWindow().getDecorView(), "32,5 °C"));
             click(activity, "Espaço");
             assertNotNull(find(activity.getWindow().getDecorView(), "Gerenciar armazenamento"));
-            click(activity, "Desempenho");
+            click(activity, "Sistema");
             assertNotNull(find(activity.getWindow().getDecorView(), "MEMÓRIA RAM EM USO"));
             assertNotNull(find(activity.getWindow().getDecorView(), "Indisponível nesta versão do Android"));
-            click(activity, "Visão geral");
+            click(activity, "Início");
             assertNotNull(find(activity.getWindow().getDecorView(), "Um olhar no sistema"));
         }
     }
@@ -69,8 +69,23 @@ public class MainActivityTest {
 
     @Test @Config(sdk = 35) public void targetAndroidVersionCanReadPerformanceScreen() {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
-            click(controller.get(), "Desempenho");
+            click(controller.get(), "Sistema");
             assertNotNull(find(controller.get().getWindow().getDecorView(), "Estado térmico"));
+        }
+    }
+
+    @Test public void careScreenDoesNotApplySettingsWithoutConsent() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            click(activity, "Cuidar");
+            assertFalse(new ScreenProfile(activity).active());
+            assertFalse(Maintenance.enabled(activity));
+            click(activity, "Aplicar perfil econômico");
+            assertFalse(new ScreenProfile(activity).active());
+            android.app.AlertDialog dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+            assertTrue(dialog.isShowing());
+            dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();
+            assertFalse(new ScreenProfile(activity).active());
         }
     }
 
